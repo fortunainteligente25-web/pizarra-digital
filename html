@@ -1,0 +1,558 @@
+
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Pizarra de Gestos</title>
+
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1646424915/hands.js" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils@0.3.1640029074/camera_utils.js" crossorigin="anonymous"></script>
+
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: #0f0f0f;
+      color: #e0e0e0;
+      font-family: system-ui, sans-serif;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      min-height: 100vh;
+      padding: 16px;
+      gap: 12px;
+    }
+
+    h1 { font-size: 18px; font-weight: 500; letter-spacing: 0.05em; color: #ffffff; }
+
+    #toolbar {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      background: #1a1a1a;
+      border: 1px solid #2a2a2a;
+      border-radius: 12px;
+      padding: 10px 16px;
+      flex-wrap: wrap;
+      width: 100%;
+      max-width: 900px;
+    }
+
+    .swatch {
+      width: 28px; height: 28px;
+      border-radius: 50%; cursor: pointer;
+      border: 2px solid transparent;
+      transition: transform 0.15s, border-color 0.15s;
+      flex-shrink: 0;
+    }
+    .swatch:hover { transform: scale(1.15); }
+    .swatch.active { border-color: #ffffff; transform: scale(1.2); }
+
+    .divider { width: 1px; height: 28px; background: #2a2a2a; flex-shrink: 0; }
+
+    label { font-size: 13px; color: #888; }
+    input[type="range"] { width: 90px; accent-color: #ffffff; cursor: pointer; }
+    #brushLabel { font-size: 13px; color: #ccc; min-width: 28px; }
+
+    button {
+      background: #1a1a1a; color: #e0e0e0;
+      border: 1px solid #333; border-radius: 8px;
+      padding: 6px 14px; font-size: 13px;
+      cursor: pointer; transition: background 0.15s;
+    }
+    button:hover { background: #2a2a2a; }
+    button:active { transform: scale(0.97); }
+
+    #startBtn { background: #ffffff; color: #0f0f0f; border: none; font-weight: 500; }
+    #startBtn:hover { background: #dddddd; }
+
+    #canvas-wrap {
+      position: relative;
+      width: 100%; max-width: 900px;
+      border-radius: 12px; overflow: hidden;
+      border: 1px solid #2a2a2a;
+    }
+
+    #drawCanvas { display: block; width: 100%; background: #111; }
+
+    #camCanvas {
+      position: absolute; bottom: 10px; right: 10px;
+      width: 180px; border-radius: 8px;
+      border: 1px solid #333; opacity: 0.75;
+      pointer-events: none;
+    }
+
+    /* Indicador de zoom en esquina superior derecha */
+    #zoomIndicator {
+      position: absolute; top: 10px; right: 10px;
+      background: rgba(0,0,0,0.6);
+      color: #fff; font-size: 13px;
+      padding: 4px 10px; border-radius: 8px;
+      border: 1px solid #444;
+      pointer-events: none;
+      display: none;
+    }
+
+    /* Línea visual entre pulgar e índice durante pellizco */
+    #pinchLine {
+      position: absolute; pointer-events: none;
+      top: 0; left: 0; width: 100%; height: 100%;
+    }
+
+    #cursor {
+      position: absolute;
+      width: 16px; height: 16px;
+      border-radius: 50%;
+      border: 2px solid #fff;
+      pointer-events: none;
+      transform: translate(-50%, -50%);
+      display: none;
+    }
+
+    #statusBar {
+      display: flex; align-items: center; gap: 10px;
+      font-size: 13px; color: #888;
+      width: 100%; max-width: 900px;
+    }
+
+    #statusDot {
+      width: 8px; height: 8px; border-radius: 50%;
+      background: #444; flex-shrink: 0;
+      transition: background 0.3s;
+    }
+    #statusDot.drawing { background: #55ffaa; }
+    #statusDot.erasing { background: #ffdd55; }
+    #statusDot.paused  { background: #ff5555; }
+    #statusDot.zooming { background: #55aaff; }
+
+    #statusText { color: #aaa; }
+
+    #legend {
+      display: flex; gap: 16px; flex-wrap: wrap;
+      font-size: 12px; color: #666;
+      width: 100%; max-width: 900px;
+    }
+    .legend-item { display: flex; align-items: center; gap: 6px; }
+    .legend-icon { font-size: 16px; line-height: 1; }
+
+    #hiddenVideo { display: none; }
+  </style>
+</head>
+<body>
+
+  <h1>Pizarra de Gestos</h1>
+
+  <div id="toolbar">
+    <div class="swatch active" style="background:#ffffff" data-color="#ffffff" title="Blanco"></div>
+    <div class="swatch" style="background:#ff5555" data-color="#ff5555" title="Rojo"></div>
+    <div class="swatch" style="background:#55aaff" data-color="#55aaff" title="Azul"></div>
+    <div class="swatch" style="background:#55ffaa" data-color="#55ffaa" title="Verde"></div>
+    <div class="swatch" style="background:#ffdd55" data-color="#ffdd55" title="Amarillo"></div>
+    <div class="swatch" style="background:#ff88ff" data-color="#ff88ff" title="Rosa"></div>
+    <div class="swatch" style="background:#ff9933" data-color="#ff9933" title="Naranja"></div>
+
+    <div class="divider"></div>
+
+    <label for="brushSize">Grosor</label>
+    <input type="range" id="brushSize" min="2" max="40" value="6" step="1" />
+    <span id="brushLabel">6px</span>
+
+    <div class="divider"></div>
+
+    <button id="clearBtn">🗑 Limpiar</button>
+    <button id="resetZoomBtn">🔍 Reset zoom</button>
+    <button id="startBtn">📷 Activar cámara</button>
+  </div>
+
+  <div id="canvas-wrap">
+    <canvas id="drawCanvas" width="900" height="600"></canvas>
+    <canvas id="camCanvas" width="180" height="135"></canvas>
+    <svg id="pinchLine" xmlns="http://www.w3.org/2000/svg"></svg>
+    <div id="zoomIndicator">🔍 100%</div>
+    <div id="cursor"></div>
+  </div>
+
+  <div id="statusBar">
+    <div id="statusDot"></div>
+    <span id="statusText">Pulsa "Activar cámara" para empezar</span>
+  </div>
+
+  <div id="legend">
+    <div class="legend-item"><span class="legend-icon">☝️</span> Solo índice = dibujar</div>
+    <div class="legend-item"><span class="legend-icon">✌️</span> Dos dedos = borrador</div>
+    <div class="legend-item"><span class="legend-icon">✋</span> Palma abierta = pausa</div>
+    <div class="legend-item"><span class="legend-icon">🤏</span> Pellizco = zoom in/out</div>
+  </div>
+
+  <video id="hiddenVideo" playsinline></video>
+
+  <script>
+    // ── Referencias DOM ──
+    const drawCanvas   = document.getElementById('drawCanvas');
+    const camCanvas    = document.getElementById('camCanvas');
+    const cursorEl     = document.getElementById('cursor');
+    const statusDot    = document.getElementById('statusDot');
+    const statusText   = document.getElementById('statusText');
+    const brushSlider  = document.getElementById('brushSize');
+    const brushLabel   = document.getElementById('brushLabel');
+    const startBtn     = document.getElementById('startBtn');
+    const clearBtn     = document.getElementById('clearBtn');
+    const resetZoomBtn = document.getElementById('resetZoomBtn');
+    const pinchLineSvg = document.getElementById('pinchLine');
+    const zoomIndicator= document.getElementById('zoomIndicator');
+    const video        = document.getElementById('hiddenVideo');
+
+    const dc = drawCanvas.getContext('2d');
+    const cc = camCanvas.getContext('2d');
+
+    // ── Estado ──
+    let color     = '#ffffff';
+    let brushSize = 6;
+    let isEraser  = false;
+    let lastX     = null;
+    let lastY     = null;
+    let cameraOn  = false;
+
+    // Estado de zoom
+    let zoomLevel      = 1.0;        // nivel actual de zoom
+    let zoomCenterX    = 450;        // centro del zoom en coordenadas del canvas
+    let zoomCenterY    = 300;
+    let pinchStartDist = null;       // distancia inicial del pellizco
+    let pinchStartZoom = 1.0;        // zoom al inicio del pellizco
+    const ZOOM_MIN     = 0.5;
+    const ZOOM_MAX     = 5.0;
+
+    // ── Historial de gestos para suavizar (últimos N frames) ──
+    // Evita que un frame ruidoso cambie el modo abruptamente
+    const GESTURE_HISTORY = 5;
+    let gestureBuffer = [];          // almacena los últimos gestos detectados
+
+    function getMostFrequentGesture(buf) {
+      // Devuelve el gesto que más veces aparece en el buffer
+      const freq = {};
+      for (const g of buf) freq[g] = (freq[g] || 0) + 1;
+      return Object.entries(freq).sort((a, b) => b[1] - a[1])[0][0];
+    }
+
+    // ── Fondo inicial ──
+    dc.fillStyle = '#111111';
+    dc.fillRect(0, 0, drawCanvas.width, drawCanvas.height);
+
+    // ── Colores ──
+    document.querySelectorAll('.swatch').forEach(swatch => {
+      swatch.addEventListener('click', () => {
+        document.querySelectorAll('.swatch').forEach(s => s.classList.remove('active'));
+        swatch.classList.add('active');
+        color    = swatch.dataset.color;
+        isEraser = false;
+      });
+    });
+
+    // ── Grosor ──
+    brushSlider.addEventListener('input', () => {
+      brushSize = parseInt(brushSlider.value);
+      brushLabel.textContent = brushSize + 'px';
+    });
+
+    // ── Limpiar ──
+    clearBtn.addEventListener('click', () => {
+      dc.fillStyle = '#111111';
+      dc.fillRect(0, 0, drawCanvas.width, drawCanvas.height);
+      lastX = null; lastY = null;
+    });
+
+    // ── Reset zoom ──
+    resetZoomBtn.addEventListener('click', () => {
+      zoomLevel   = 1.0;
+      zoomCenterX = drawCanvas.width  / 2;
+      zoomCenterY = drawCanvas.height / 2;
+      updateZoomIndicator();
+    });
+
+    // ── Estado visual ──
+    function setStatus(mode, msg) {
+      statusDot.className    = mode;
+      statusText.textContent = msg;
+    }
+
+    function updateZoomIndicator() {
+      const pct = Math.round(zoomLevel * 100);
+      zoomIndicator.textContent = '🔍 ' + pct + '%';
+      zoomIndicator.style.display = zoomLevel !== 1.0 ? 'block' : 'none';
+    }
+
+    // ── Convertir coordenadas normalizadas → píxeles del canvas (con zoom) ──
+    function normToCanvas(nx, ny) {
+      // Espejamos X (modo selfie)
+      const rawX = (1 - nx) * drawCanvas.width;
+      const rawY = ny * drawCanvas.height;
+
+      // Aplicar transformación inversa del zoom para pintar en el lugar correcto
+      const cx = (rawX - zoomCenterX) / zoomLevel + zoomCenterX;
+      const cy = (rawY - zoomCenterY) / zoomLevel + zoomCenterY;
+      return { x: cx, y: cy };
+    }
+
+    // ── Dibujar en el canvas ──
+    function drawAt(nx, ny) {
+      const { x, y } = normToCanvas(nx, ny);
+
+      // Cursor visual (en coordenadas de pantalla, antes del zoom)
+      const rawX = (1 - nx) * drawCanvas.width;
+      const rawY = ny * drawCanvas.height;
+      const wrap   = document.getElementById('canvas-wrap');
+      const scaleX = wrap.offsetWidth  / drawCanvas.width;
+      const scaleY = wrap.offsetHeight / drawCanvas.height;
+      cursorEl.style.left    = (rawX * scaleX) + 'px';
+      cursorEl.style.top     = (rawY * scaleY) + 'px';
+      cursorEl.style.display = 'block';
+
+      if (lastX !== null) {
+        dc.save();
+
+        // Aplicar transformación de zoom al canvas
+        dc.translate(zoomCenterX, zoomCenterY);
+        dc.scale(zoomLevel, zoomLevel);
+        dc.translate(-zoomCenterX, -zoomCenterY);
+
+        dc.beginPath();
+        dc.moveTo(lastX, lastY);
+        dc.lineTo(x, y);
+        dc.strokeStyle = isEraser ? '#111111' : color;
+        dc.lineWidth   = isEraser ? brushSize * 3 : brushSize;
+        dc.lineCap     = 'round';
+        dc.lineJoin    = 'round';
+        dc.stroke();
+
+        dc.restore();
+      }
+
+      lastX = x;
+      lastY = y;
+    }
+
+
+    // ── Distancia entre dos landmarks ──
+    function dist(a, b) {
+      const dx = a.x - b.x;
+      const dy = a.y - b.y;
+      return Math.sqrt(dx * dx + dy * dy);
+    }
+
+    // ── Detección de dedos extendidos ──
+    // Compara la distancia de la PUNTA a la muñeca vs la distancia del NUDILLO a la muñeca.
+    // Si la punta está más lejos que el nudillo → dedo extendido.
+    // Esto funciona en cualquier posición o altura de la mano porque es relativo,
+    // no depende del eje Y absoluto.
+    function getExtendedFingers(lm) {
+      const fingers = [
+        { tip: 8,  mcp: 5  },  // índice
+        { tip: 12, mcp: 9  },  // corazón
+        { tip: 16, mcp: 13 },  // anular
+        { tip: 20, mcp: 17 },  // meñique
+      ];
+
+      const wrist = lm[0];
+      const extended = [];
+
+      for (const f of fingers) {
+        const distTip = dist(lm[f.tip], wrist);
+        const distMcp = dist(lm[f.mcp], wrist);
+        // Margen del 15%: evita que dedos semiflexionados cuenten
+        if (distTip > distMcp * 1.15) {
+          extended.push(f.tip);
+        }
+      }
+
+      // Pulgar: extendido si su punta está más lejos de lm[5] que su base lm[3]
+      if (dist(lm[4], lm[5]) > dist(lm[3], lm[5]) * 1.1) {
+        extended.push(4);
+      }
+
+      return extended;
+    }
+
+    // ── Detectar pellizco (pulgar + índice juntos) ──
+    // El pellizco se activa cuando la distancia entre punta del pulgar (4)
+    // y punta del índice (8) es menor que un umbral relativo al tamaño de la mano.
+    function isPinching(lm) {
+      const palmSize   = Math.abs(lm[9].y - lm[0].y);
+      const pinchDist  = dist(lm[4], lm[8]);
+      // Pellizco si la distancia es menor al 25% del tamaño de la palma
+      return pinchDist < palmSize * 0.25;
+    }
+
+    // ── Dibujar línea SVG del pellizco ──
+    function drawPinchLine(lm) {
+      const wrap   = document.getElementById('canvas-wrap');
+      const W      = wrap.offsetWidth;
+      const H      = wrap.offsetHeight;
+
+      // Espejamos X
+      const x1 = (1 - lm[4].x) * W;
+      const y1 = lm[4].y * H;
+      const x2 = (1 - lm[8].x) * W;
+      const y2 = lm[8].y * H;
+
+      pinchLineSvg.innerHTML = `
+        <circle cx="${x1}" cy="${y1}" r="6" fill="#55aaff" opacity="0.8"/>
+        <circle cx="${x2}" cy="${y2}" r="6" fill="#55aaff" opacity="0.8"/>
+        <line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}"
+              stroke="#55aaff" stroke-width="2" stroke-dasharray="4,4" opacity="0.7"/>
+      `;
+    }
+
+    function clearPinchLine() {
+      pinchLineSvg.innerHTML = '';
+    }
+
+    // ── Callback principal de MediaPipe ──
+    function onResults(results) {
+      // Dibujar espejo de cámara
+      cc.clearRect(0, 0, camCanvas.width, camCanvas.height);
+      if (results.image) {
+        cc.save();
+        cc.scale(-1, 1);
+        cc.drawImage(results.image, -camCanvas.width, 0, camCanvas.width, camCanvas.height);
+        cc.restore();
+      }
+
+      // Sin mano
+      if (!results.multiHandLandmarks || results.multiHandLandmarks.length === 0) {
+        cursorEl.style.display = 'none';
+        clearPinchLine();
+        lastX = null; lastY = null;
+        pinchStartDist = null;
+        gestureBuffer  = [];
+        setStatus('', 'Sin mano detectada — acerca la mano a la cámara');
+        return;
+      }
+
+      const lm       = results.multiHandLandmarks[0];
+      const extended = getExtendedFingers(lm);
+      const count    = extended.length;
+      const pinch    = isPinching(lm);
+
+      // ── Lógica de gestos ──
+
+      // 1. PELLIZCO → zoom (tiene prioridad sobre el resto)
+      if (pinch && count <= 2) {
+        clearPinchLine();
+        drawPinchLine(lm);
+        cursorEl.style.display = 'none';
+        lastX = null; lastY = null;
+
+        const currentDist = dist(lm[4], lm[8]);
+
+        if (pinchStartDist === null) {
+          // Primer frame del pellizco: guardar distancia inicial
+          pinchStartDist = currentDist;
+          pinchStartZoom = zoomLevel;
+          // Centro del zoom = punto medio entre pulgar e índice
+          zoomCenterX = ((1 - lm[4].x) + (1 - lm[8].x)) / 2 * drawCanvas.width;
+          zoomCenterY = (lm[4].y + lm[8].y) / 2 * drawCanvas.height;
+        } else {
+          // Calcular nuevo zoom proporcional a la variación de distancia
+          const ratio    = currentDist / pinchStartDist;
+          zoomLevel      = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, pinchStartZoom * ratio));
+          updateZoomIndicator();
+        }
+
+        const pct = Math.round(zoomLevel * 100);
+        setStatus('zooming', `🤏 Pellizco — zoom ${pct}%`);
+        gestureBuffer = [];
+        return;
+      }
+
+      // Si no hay pellizco, resetear estado del pellizco
+      pinchStartDist = null;
+      clearPinchLine();
+
+      // Determinar gesto actual
+      let gesture;
+      if (count >= 4)      gesture = 'pause_open';
+      else if (count === 1 && extended.includes(8))  gesture = 'draw';
+      else if (count === 2 && extended.includes(8) && extended.includes(12)) gesture = 'erase';
+      else                  gesture = 'pause_open'; // cualquier otra cosa = pausa
+
+      // Añadir al buffer de historial y recortar
+      gestureBuffer.push(gesture);
+      if (gestureBuffer.length > GESTURE_HISTORY) gestureBuffer.shift();
+
+      // Usar el gesto más frecuente en los últimos N frames
+      const stableGesture = getMostFrequentGesture(gestureBuffer);
+
+      const tip = lm[8]; // punta del índice
+
+      if (stableGesture === 'pause_open') {
+        lastX = null; lastY = null;
+        cursorEl.style.display = 'none';
+        setStatus('paused', '✋ Palma abierta — pausado');
+
+      } else if (stableGesture === 'erase') {
+        isEraser = true;
+        cursorEl.style.width       = (brushSize * 3) + 'px';
+        cursorEl.style.height      = (brushSize * 3) + 'px';
+        cursorEl.style.borderColor = '#ffdd55';
+        drawAt(tip.x, tip.y);
+        setStatus('erasing', '✌️ Borrador activo');
+
+      } else if (stableGesture === 'draw') {
+        isEraser = false;
+        cursorEl.style.width       = brushSize + 'px';
+        cursorEl.style.height      = brushSize + 'px';
+        cursorEl.style.borderColor = color;
+        drawAt(tip.x, tip.y);
+        setStatus('drawing', '☝️ Dibujando');
+
+      }
+    }
+
+    // ── Iniciar cámara ──
+    startBtn.addEventListener('click', async () => {
+      if (cameraOn) return;
+      cameraOn = true;
+      startBtn.disabled    = true;
+      startBtn.textContent = '⏳ Iniciando...';
+      setStatus('', 'Solicitando acceso a la cámara...');
+
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user' } });
+        video.srcObject = stream;
+        await video.play();
+
+        const hands = new Hands({
+          locateFile: file =>
+            `https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1646424915/${file}`
+        });
+
+        hands.setOptions({
+          maxNumHands:            1,
+          modelComplexity:        1,
+          minDetectionConfidence: 0.75,  // un poco más alto = menos ruido
+          minTrackingConfidence:  0.6
+        });
+
+        hands.onResults(onResults);
+
+        setStatus('', 'Cámara activa — muestra tu mano');
+        startBtn.textContent = '✅ Cámara activa';
+
+        async function loop() {
+          if (video.readyState >= 2) await hands.send({ image: video });
+          requestAnimationFrame(loop);
+        }
+        loop();
+
+      } catch (err) {
+        cameraOn             = false;
+        startBtn.disabled    = false;
+        startBtn.textContent = '📷 Activar cámara';
+        setStatus('paused', 'Error al acceder a la cámara: ' + err.message);
+      }
+    });
+  </script>
+
+</body>
+</html>
